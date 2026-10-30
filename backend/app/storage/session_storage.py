@@ -146,7 +146,7 @@ class SessionStorage:
         # 1. Write JSON file audit backup
         try:
             json_file = self.storage_dir / f"{session.session_id}.json"
-            json_file.write_text(json.dumps(session.model_dump(mode="json"), indent=2), encoding="utf-8")
+            json_file.write_text(json.dumps(self._adaptive_json(session), indent=2), encoding="utf-8")
         except Exception as e:
             print(f"JSON backup save warning: {e}")
 
@@ -337,6 +337,109 @@ class SessionStorage:
             return False
         finally:
             db.close()
+
+    def _adaptive_json(self, session: AssessmentSession) -> dict:
+        data = session.model_dump(mode="json")
+        state = session.state_data or {}
+        topic_plan = state.get("topic_plan") or []
+        topic_counts = state.get("topic_counts") or {}
+        current_index = int(state.get("current_topic_index", 0))
+        if current_index >= len(topic_plan):
+            current_index = max(len(topic_plan) - 1, 0)
+
+        submissions = session.submissions
+        topic_types = state.get("topic_types", {})
+        job_role_topics = [topic for topic in topic_plan[:2] if topic]
+        project_topic_names = [
+            project.get("name")
+            for project in (session.resume_data or {}).get("projects", [])
+            if isinstance(project, dict) and project.get("name")
+        ]
+
+        if topic_types:
+            grouped_plan = {"JOB_ROLE": [], "TECHNICAL_SKILLS": [], "PROJECT": []}
+            for topic in topic_plan:
+                grouped_plan.setdefault(topic_types.get(topic, "TECHNICAL_SKILLS"), []).append(topic)
+        else:
+            grouped_plan = {
+                "JOB_ROLE": job_role_topics,
+                "TECHNICAL_SKILLS": [topic for topic in topic_plan if topic not in job_role_topics and topic not in project_topic_names][:4],
+                "PROJECT": [topic for topic in topic_plan if topic in project_topic_names],
+            }
+
+        grouped_questions = {topic: [] for topic in topic_plan}
+        for question in session.questions:
+            topic = question.topic or "General"
+            grouped_questions.setdefault(topic, [])
+            submission = submissions.get(question.id)
+            if submission is None:
+                submission = submissions.get(str(question.id))
+
+            nlp = submission.nlp_evaluation if submission else {}
+            answer = ""
+            if submission:
+                answer = submission.answer_text or submission.transcript or ""
+
+            history_question = {
+                "id": question.id,
+                "difficulty": question.difficulty,
+                "question": question.question,
+                "answer": answer,
+                "nlp_score": nlp.get("combined_nlp_score", nlp.get("overall_nlp_score", 0)),
+                "knowledge_gaps": nlp.get("knowledge_gaps", []),
+                "needs_followup": bool(nlp.get("needs_followup", False)),
+            }
+
+            if submission:
+                history_question.update({
+                    "answer_text": submission.answer_text or "",
+                    "transcript": submission.transcript or "",
+                    "transcription_status": submission.transcription_status,
+                    "audio_path": submission.audio_path,
+                    "video_path": submission.video_path,
+                    "speech_metrics": submission.speech_metrics.model_dump(mode="json") if submission.speech_metrics else None,
+                    "video_metrics": submission.video_metrics.model_dump(mode="json") if submission.video_metrics else None,
+                    "nlp_evaluation": nlp,
+                })
+
+            grouped_questions[topic].append(history_question)
+
+        history = []
+        for index, topic in enumerate(topic_plan):
+            questions = grouped_questions.get(topic, [])
+            count = topic_counts.get(topic, len(questions))
+            if count >= state.get("max_questions_per_topic", 3) or index < current_index:
+                status = "complete"
+            elif index == current_index or questions:
+                status = "in_progress"
+            else:
+                status = "pending"
+            history.append({
+                "topic_number": index + 1,
+                "topic": topic,
+                "topic_type": topic_types.get(topic, "JOB_ROLE" if topic in job_role_topics else "PROJECT" if topic in project_topic_names else "TECHNICAL_SKILLS"),
+                "status": status,
+                "question_count": count,
+                "questions": questions,
+            })
+
+        data["max_topics"] = state.get("max_topics", 6)
+        data["current_topic_number"] = current_index + 1 if topic_plan else 1
+        data["current_question_number"] = session.current_question_number
+        data["topic_plan"] = grouped_plan
+        data["topic_history"] = history
+        data["resume_summary"] = {
+            "skills": (session.resume_data or {}).get("skills", []),
+            "projects": [
+                {
+                    "name": project.get("name"),
+                    "tech_stack": project.get("tech_stack", []),
+                }
+                for project in (session.resume_data or {}).get("projects", [])
+                if isinstance(project, dict)
+            ],
+        }
+        return data
 
     def _orm_to_domain(self, db_session: AssessmentSessionDB) -> AssessmentSession:
         """Convert SQLAlchemy ORM DB object into domain AssessmentSession."""

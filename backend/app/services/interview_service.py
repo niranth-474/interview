@@ -23,8 +23,8 @@ logger = logging.getLogger("interview_service")
 
 _video_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="video_analysis")
 
-MAX_TOPICS = 4
-MAX_QUESTIONS_PER_TOPIC = 4
+MAX_TOPICS = 6
+MAX_QUESTIONS_PER_TOPIC = 3
 DEFAULT_TOPIC_NAMES = [
     "Core Fundamentals",
     "Problem Solving",
@@ -34,12 +34,23 @@ DEFAULT_TOPIC_NAMES = [
 
 
 def build_topic_plan(role: str, resume_data: Dict[str, Any], first_topic: str) -> List[str]:
-    candidates: List[str] = [first_topic]
+    projects = [
+        project.get("name", "").strip()
+        for project in resume_data.get("projects", []) or []
+        if isinstance(project, dict) and project.get("name", "").strip()
+    ]
+    skills = []
     for skill in resume_data.get("skills", []) or []:
         if isinstance(skill, str) and skill.strip():
-            candidates.append(skill.strip())
+            skills.append(skill.strip())
 
-    candidates.extend([f"{role} Fundamentals", *DEFAULT_TOPIC_NAMES])
+    job_role_topics = [
+        f"Debugging and incident response in {role}",
+        f"Software design trade-offs for {role}",
+    ]
+    technical_topics = skills[:2] or ["Programming Fundamentals", "Data Structures and Algorithms"]
+    project_topics = projects[:2] or ["Resume project implementation", "Resume project architecture"]
+    candidates = job_role_topics + technical_topics + project_topics
 
     plan: List[str] = []
     seen = set()
@@ -52,6 +63,22 @@ def build_topic_plan(role: str, resume_data: Dict[str, Any], first_topic: str) -
         if len(plan) == MAX_TOPICS:
             break
     return plan
+
+
+def build_topic_types(topic_plan: List[str], resume_data: Dict[str, Any]) -> Dict[str, str]:
+    project_names = {
+        project.get("name", "").strip()
+        for project in resume_data.get("projects", []) or []
+        if isinstance(project, dict) and project.get("name", "").strip()
+    }
+    return {
+        topic: (
+            "PROJECT" if topic in project_names
+            else "JOB_ROLE" if index < 2
+            else "TECHNICAL_SKILLS"
+        )
+        for index, topic in enumerate(topic_plan)
+    }
 
 
 class InterviewService:
@@ -113,6 +140,7 @@ class InterviewService:
                 "knowledge_gaps": [],
                 "difficulty_progression": [q1.difficulty or "EASY"],
                 "topic_plan": topic_plan,
+                "topic_types": build_topic_types(topic_plan, extracted_resume),
                 "topic_counts": {topic: (1 if topic.lower() == (q1.topic or "").lower() else 0) for topic in topic_plan},
                 "current_topic_index": 0,
                 "max_questions_per_topic": MAX_QUESTIONS_PER_TOPIC,
