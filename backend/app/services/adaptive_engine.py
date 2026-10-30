@@ -83,7 +83,8 @@ class AdaptiveEngine:
         topic_plan: List[str],
         topic_counts: Dict[str, int],
         current_topic_index: int,
-        needs_followup: bool = True
+        needs_followup: bool = True,
+        session_json: Dict[str, Any] = None
     ) -> AdaptiveEngineDecision:
         """Evaluate previous performance and adaptively generate the next question."""
         
@@ -154,6 +155,7 @@ class AdaptiveEngine:
             "current_topic_index": current_topic_index,
             "current_topic": topic_plan[current_topic_index] if current_topic_index < len(topic_plan) else None,
             "needs_followup": needs_followup,
+            "session_json": session_json or {},
             "max_questions_per_topic": 4
         }
 

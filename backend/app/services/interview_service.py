@@ -292,7 +292,8 @@ class InterviewService:
                 topic_plan=topic_plan,
                 topic_counts=topic_counts,
                 current_topic_index=current_topic_index,
-                needs_followup=bool(nlp_eval.get("needs_followup", False))
+                needs_followup=bool(nlp_eval.get("needs_followup", False)),
+                session_json=session.model_dump(mode="json")
             )
 
             target_topic = topic_plan[current_topic_index]
