@@ -8,12 +8,14 @@ class AppState {
         this.resumeData = null;
         this.isRecording = false;
         this.evaluation = null;
+        this.maxQuestions = 16;
     }
 
     setSession(session) {
         this.sessionId = session.session_id;
         this.selectedRole = session.selected_role;
         this.questions = session.questions || [];
+        this.maxQuestions = session.state_data?.max_questions || this.questions.length || 16;
         if (session.answers) {
             session.answers.forEach(ans => {
                 this.answers.set(ans.question_id, ans);

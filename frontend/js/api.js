@@ -1,4 +1,4 @@
-const API = {
+﻿const API = {
     getToken() {
         return localStorage.getItem("auth_token") || "";
     },
@@ -14,7 +14,7 @@ const API = {
     getAuthHeaders(headers = {}) {
         const token = this.getToken();
         if (token) {
-            headers["Authorization"] = `Bearer ${token}`;
+            headers["Authorization"] = "Bearer " + token;
         }
         return headers;
     },

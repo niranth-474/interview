@@ -26,3 +26,5 @@ In `.env`:
 STRUCTURED_EVALUATION_ENABLED=true
 STRUCTURED_EVALUATION_WEIGHT=0.25
 ```
+cd D:\projects\interview-analyzer
+.\myenv\Scripts\python.exe -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000

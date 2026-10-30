@@ -447,7 +447,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (topicElem) topicElem.textContent = `${q.topic || "Technical"} • Difficulty: ${q.difficulty || "MEDIUM"}`;
 
         const numberElem = document.getElementById("questionNumber");
-        if (numberElem) numberElem.textContent = `Question ${window.state.currentQuestionIndex + 1} of 5`;
+        if (numberElem) numberElem.textContent = `Question ${window.state.currentQuestionIndex + 1}`;
 
         if (questionText) {
             questionText.textContent = q.question;
@@ -459,7 +459,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         const fillElem = document.getElementById("progressBarFill");
         if (fillElem) {
-            const pct = Math.min(100, ((window.state.currentQuestionIndex + 1) / 5) * 100);
+            const pct = Math.min(100, ((window.state.currentQuestionIndex + 1) / window.state.maxQuestions) * 100);
             fillElem.style.width = `${pct}%`;
         }
 
@@ -526,7 +526,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             if (recBadge) recBadge.hidden = false;
             startTimer();
             if (statusMessage) {
-                statusMessage.innerHTML = `<span style="color:var(--accent-cyan)">● Recording Answer ${window.state.currentQuestionIndex + 1} of 5</span>`;
+                statusMessage.innerHTML = `<span style="color:var(--accent-cyan)">● Recording Answer ${window.state.currentQuestionIndex + 1}</span>`;
             }
         }
     }
@@ -573,7 +573,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             // Clear pending retry data on success
             pendingUpload = null;
 
-            if (isLast) {
+            if (isLast || res.is_last_question) {
                 showCompletionState();
                 if (statusMessage) statusMessage.textContent = "Generating your multimodal evaluation report…";
                 try {
@@ -645,7 +645,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             const currentQ = window.state.getCurrentQuestion();
             if (!currentQ) return;
 
-            const isLast = (window.state.currentQuestionIndex >= 4) || (currentQ.id >= 5);
+            const isLast = window.state.currentQuestionIndex >= window.state.maxQuestions - 1
+                || currentQ.id >= window.state.maxQuestions;
             const textAnswer = textAnswerInput ? textAnswerInput.value.trim() : "";
 
             isSubmitting = true;

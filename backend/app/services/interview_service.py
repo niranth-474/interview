@@ -23,6 +23,36 @@ logger = logging.getLogger("interview_service")
 
 _video_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="video_analysis")
 
+MAX_TOPICS = 4
+MAX_QUESTIONS_PER_TOPIC = 4
+DEFAULT_TOPIC_NAMES = [
+    "Core Fundamentals",
+    "Problem Solving",
+    "System Design",
+    "Best Practices",
+]
+
+
+def build_topic_plan(role: str, resume_data: Dict[str, Any], first_topic: str) -> List[str]:
+    candidates: List[str] = [first_topic]
+    for skill in resume_data.get("skills", []) or []:
+        if isinstance(skill, str) and skill.strip():
+            candidates.append(skill.strip())
+
+    candidates.extend([f"{role} Fundamentals", *DEFAULT_TOPIC_NAMES])
+
+    plan: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        normalized = candidate.strip()
+        key = normalized.lower()
+        if normalized and key not in seen:
+            plan.append(normalized)
+            seen.add(key)
+        if len(plan) == MAX_TOPICS:
+            break
+    return plan
+
 
 class InterviewService:
     def __init__(self):
@@ -59,6 +89,7 @@ class InterviewService:
         
         # 3. Generate initial Question 1
         q1 = question_service.generate_initial_question(selected_role, extracted_resume)
+        topic_plan = build_topic_plan(selected_role, extracted_resume, q1.topic or "Core Fundamentals")
         
         # 4. Create and persist session object
         session = AssessmentSession(
@@ -80,7 +111,12 @@ class InterviewService:
                 "topics_tested": [q1.topic],
                 "strengths": [],
                 "knowledge_gaps": [],
-                "difficulty_progression": [q1.difficulty or "EASY"]
+                "difficulty_progression": [q1.difficulty or "EASY"],
+                "topic_plan": topic_plan,
+                "topic_counts": {topic: (1 if topic.lower() == (q1.topic or "").lower() else 0) for topic in topic_plan},
+                "current_topic_index": 0,
+                "max_questions_per_topic": MAX_QUESTIONS_PER_TOPIC,
+                "max_questions": MAX_TOPICS * MAX_QUESTIONS_PER_TOPIC
             }
         )
         session_storage.save_session(session)
@@ -194,6 +230,19 @@ class InterviewService:
         diff_prog = state_data.get("difficulty_progression", [])
         diff_prog.append(current_q.difficulty or "MEDIUM")
 
+        topic_plan = state_data.get("topic_plan") or build_topic_plan(
+            session.selected_role,
+            session.resume_data or {},
+            current_q.topic or "Core Fundamentals",
+        )
+        topic_counts = state_data.get("topic_counts") or {}
+        current_topic_index = int(state_data.get("current_topic_index", 0))
+        if current_topic_index >= len(topic_plan):
+            current_topic_index = len(topic_plan) - 1
+
+        current_topic = topic_plan[current_topic_index]
+        topic_counts[current_topic] = int(topic_counts.get(current_topic, 0)) + 1
+
         if nlp_eval.get("major_misconception"):
             misconceptions = state_data.get("misconceptions_detected", [])
             misconceptions.append({
@@ -207,13 +256,25 @@ class InterviewService:
         state_data["knowledge_gaps"] = list(set(gaps))
         state_data["topics_tested"] = topics
         state_data["difficulty_progression"] = diff_prog
+        state_data["topic_plan"] = topic_plan
+        state_data["topic_counts"] = topic_counts
+        state_data["current_topic_index"] = current_topic_index
         session.state_data = state_data
 
         # 6. Adaptive Engine Decision for Next Question (returns immediately to client)
         next_question_item = None
-        max_questions = 5  # 5 questions total adaptively generated
+        max_questions = MAX_TOPICS * MAX_QUESTIONS_PER_TOPIC
+        satisfied_current_topic = nlp_score >= 80 or (
+            nlp_score >= 65 and not nlp_eval.get("needs_followup", False)
+        )
 
-        if question_id < max_questions:
+        if satisfied_current_topic or topic_counts[current_topic] >= MAX_QUESTIONS_PER_TOPIC:
+            current_topic_index += 1
+            state_data["current_topic_index"] = current_topic_index
+            session.state_data = state_data
+
+        has_topic_remaining = 0 <= current_topic_index < len(topic_plan)
+        if question_id < max_questions and has_topic_remaining:
             decision = adaptive_engine.decide_next_question(
                 session_id=session_id,
                 role=session.selected_role,
@@ -227,18 +288,34 @@ class InterviewService:
                 knowledge_gaps=nlp_eval.get("knowledge_gaps", []),
                 mentioned_topics=nlp_eval.get("topics_detected", []),
                 difficulty_level=current_q.difficulty or "MEDIUM",
-                question_number=question_id
+                question_number=question_id,
+                topic_plan=topic_plan,
+                topic_counts=topic_counts,
+                current_topic_index=current_topic_index,
+                needs_followup=bool(nlp_eval.get("needs_followup", False))
             )
+
+            target_topic = topic_plan[current_topic_index]
+            if satisfied_current_topic or topic_counts[current_topic] >= MAX_QUESTIONS_PER_TOPIC:
+                strategy = "NEW_TOPIC"
+                reason = (
+                    f"Completed {current_topic} and moved to {target_topic}."
+                    if topic_counts[current_topic] >= MAX_QUESTIONS_PER_TOPIC
+                    else f"Candidate demonstrated mastery of {current_topic}; moving to {target_topic}."
+                )
+            else:
+                strategy = "REMEDIAL" if nlp_score < 65 else "FOLLOW_UP"
+                reason = f"More assessment is needed in {target_topic} before moving to the next topic."
 
             next_q_id = question_id + 1
             next_question_item = QuestionItem(
                 id=next_q_id,
                 question=decision.next_question,
-                topic=decision.target_topic,
+                topic=target_topic,
                 difficulty=decision.next_difficulty,
-                source=decision.question_strategy.lower(),
-                strategy=decision.question_strategy,
-                reason=decision.reason
+                source=strategy.lower(),
+                strategy=strategy,
+                reason=reason
             )
 
             # Check if next question already added
@@ -262,7 +339,10 @@ class InterviewService:
             "speech_metrics": submission.speech_metrics.model_dump() if submission.speech_metrics else None,
             "video_metrics": submission.video_metrics.model_dump() if submission.video_metrics else None,
             "nlp_evaluation": nlp_eval,
-            "is_last_question": (question_id >= max_questions),
+            "is_last_question": (
+                question_id >= max_questions
+                or next_question_item is None
+            ),
             "next_question": next_question_item.model_dump() if next_question_item else None
         }
 
